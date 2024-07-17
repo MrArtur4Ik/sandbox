@@ -8,24 +8,30 @@ import org.lwjgl.system.MemoryStack.*
 import org.lwjgl.system.MemoryUtil.*
 import java.nio.IntBuffer
 import kotlin.math.*
+import kotlin.random.Random
+import kotlin.time.measureTime
 
 data class Vector2i(val x: Int, val y: Int)
 
-data class Vector3d(val x: Double, val y: Double, val z: Double)
+data class Vector3d(var x: Double, var y: Double, var z: Double)
+
+data class Vector3i(val x: Int, val y: Int, val z: Int)
 
 class HelloWorld {
-    // The window handle
     private var window: Long = 0
     private var windowWidth: Int = 1200
     private var windowHeight: Int = 900
-    private var cameraYaw = 180.0
+    private var cameraYaw = 0.0
     private var cameraPitch = 0.0
     private var cameraX = 0.0
     private var cameraY = 4.0
     private var cameraZ = 0.0
     private var cameraRotationSpeed = 0.1
     private var cameraMoveSpeed = 0.1
-    private var mouseGrab = true
+    private var mouseGrab = false
+    private var level = Level()
+    private var breakBlock: Vector3i? = null
+    private var placeBlock: Vector3i? = null
 
     fun run() {
         println(("Hello LWJGL " + Version.getVersion()) + "!")
@@ -51,7 +57,7 @@ class HelloWorld {
     }
 
     private fun init() {
-        // Setup an error callback. The default implementation
+        // Set up an error callback. The default implementation
         // will print the error message in System.err.
         GLFWErrorCallback.createPrint(System.err).set()
 
@@ -68,7 +74,7 @@ class HelloWorld {
         window = glfwCreateWindow(windowWidth, windowHeight, "Hello World!", NULL, NULL)
         if (window == NULL) throw RuntimeException("Failed to create the GLFW window")
 
-        // Setup a key callback. It will be called every time a key is pressed, repeated or released.
+        // Set up a key callback. It will be called every time a key is pressed, repeated or released.
         glfwSetKeyCallback(window) { window, key, scancode, action, mods ->
             // We will detect these in the rendering loop
             if (key == GLFW_KEY_ESCAPE && action == GLFW_RELEASE) {
@@ -79,6 +85,22 @@ class HelloWorld {
                 window,
                 true
             )
+            if (key == GLFW_KEY_P && action == GLFW_RELEASE) level.chunks.forEach { it.render(level) }
+            if (key == GLFW_KEY_E && action == GLFW_RELEASE) {
+                level.setBlock(floor(cameraX).toInt(), floor(cameraY).toInt(), floor(cameraZ).toInt(), 1)
+            }
+            if (key == GLFW_KEY_R && action == GLFW_RELEASE) {
+                level.setBlock(floor(cameraX).toInt(), floor(cameraY).toInt(), floor(cameraZ).toInt(), 0)
+            }
+        }
+        glfwSetMouseButtonCallback(window) { window, button, action, mods ->
+            if(button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS) {
+                if(breakBlock != null)
+                    level.setBlock(breakBlock!!.x, breakBlock!!.y, breakBlock!!.z, 0)
+            }else if(button == GLFW_MOUSE_BUTTON_RIGHT && action == GLFW_PRESS) {
+                if(placeBlock != null)
+                    level.setBlock(placeBlock!!.x, placeBlock!!.y, placeBlock!!.z, 1)
+            }
         }
         glfwSetWindowSizeCallback(window) { _, width, height ->
             windowWidth = width
@@ -139,6 +161,33 @@ class HelloWorld {
         }
     }
 
+    private fun calculateBreakBlock() {
+        val steps = 100
+        val maxDistance = 5.0
+        val distancePerStep = maxDistance/steps
+        var rayPos = Vector3d(cameraX, cameraY, cameraZ)
+        var oldPos = rayPos
+        val step = Vector3d(
+            distancePerStep * sin(cameraYaw / 180 * Math.PI) * cos(cameraPitch / 180 * Math.PI),
+            -distancePerStep * sin(cameraPitch / 180 * Math.PI),
+            -distancePerStep * cos(cameraYaw / 180 * Math.PI) * cos(cameraPitch / 180 * Math.PI)
+        )
+        (0..steps).forEach { i ->
+            val blockPos = Vector3i(floor(rayPos.x).toInt(), floor(rayPos.y).toInt(), floor(rayPos.z).toInt())
+            if(level.getBlockAt(blockPos.x, blockPos.y, blockPos.z) != 0) {
+                breakBlock = blockPos
+                placeBlock = Vector3i(floor(oldPos.x).toInt(), floor(oldPos.y).toInt(), floor(oldPos.z).toInt())
+                return
+            }
+            if(i < steps) {
+                oldPos = rayPos
+                rayPos = Vector3d(rayPos.x + step.x, rayPos.y + step.y, rayPos.z + step.z)
+            }
+        }
+        breakBlock = null
+        placeBlock = null
+    }
+
     private fun loop() {
         // This line is critical for LWJGL's interoperation with GLFW's
         // OpenGL context, or any context that is managed externally.
@@ -148,30 +197,25 @@ class HelloWorld {
         GL.createCapabilities()
 
         // Set the clear color
-        glClearColor(0.0f, 0.3f, 0.0f, 0.0f)
+        glClearColor(0.0f, 0.5f, 1.0f, 1.0f)
 
         applyFOV()
         glEnable(GL_DEPTH_TEST)
-        //glEnable(GL_CULL_FACE)
+        glEnable(GL_CULL_FACE)
+        glEnable(GL_COLOR_MATERIAL)
+        glEnable(GL_FOG)
+        glDepthFunc(GL_LESS)
 
-        /*val vertexBuffer = arrayOf(
-            -1.0, -1.0, -4.0,
-            1.0, 1.0, 1.0,
-            1.0, -1.0, -4.0,
-            1.0, 1.0, 1.0,
-            0.0,  1.0, -4.0,
-            1.0, 1.0, 1.0,
-            -1.0, -1.0, -10.0,
-            1.0, 0.0, 0.0,
-            1.0, -1.0, -10.0,
-            0.0, 1.0, 0.0,
-            0.0,  1.0, -10.0,
-            0.0, 0.0, 1.0
-        ).toDoubleArray()*/
+        //fog
+        glFogi(GL_FOG_MODE, GL_LINEAR)
+        glFogf(GL_FOG_DENSITY, 0.15f)
+        glHint(GL_FOG_HINT, GL_FASTEST)
+        glFogf(GL_FOG_START, 55.0f)
+        glFogf(GL_FOG_END, 60.0f)
+        val fogColor = arrayOf(0.0f, 0.5f, 1.0f, 1.0f).toFloatArray()
+        GL11.glFogfv(GL_FOG_COLOR, fogColor)
 
-        val vertexBufferList = mutableListOf<Double>()
-
-        fun putSquare(pos: Vector3d, color: Vector3d) {
+        /*fun putSquare(pos: Vector3d, color: Vector3d) {
             val width = 1.0
             vertexBufferList.addAll(listOf(
                 pos.x, pos.y, pos.z, color.x, color.y, color.z,
@@ -180,22 +224,35 @@ class HelloWorld {
                 pos.x+width, pos.y, pos.z+width, color.x, color.y, color.z,
                 pos.x+width, pos.y, pos.z, color.x, color.y, color.z,
                 pos.x, pos.y, pos.z, color.x, color.y, color.z))
-        }
-        (0..<128).forEach { x ->
-            (0..<128).forEach { z ->
-                putSquare(Vector3d(x*1.0, 0.0, z*1.0), Vector3d(
-                    (x.xor(z))%256/256.0,
-                    (x.xor(z))%256/256.0,
-                    (x.xor(z))%256/256.0))
+        }*/
+
+        /*(0..<16).forEach { x ->
+            (0..<16).forEach { y ->
+                (0..<16).forEach { z ->
+                    if(Random.nextBoolean()) {
+                        chunklet.setBlock(x, y, z, 1, render = false)
+                    }
+                }
+            }
+        }*/
+
+        (-4..<4).forEach { chunkX ->
+            (-4..<4).forEach { chunkZ ->
+                (0..<2).forEach { chunkY ->
+                    val chunklet = Chunklet(chunkX, chunkY, chunkZ)
+                    if(chunkY == 0) {
+                        (0..<16).forEach { x ->
+                            (0..<16).forEach { y ->
+                                chunklet.setBlock(x, 0, y, 1, render = false)
+                            }
+                        }
+                    }
+                    level.chunks.add(chunklet)
+                }
             }
         }
 
-        val vertexBuffer = vertexBufferList.toDoubleArray()
-
-        val vertexCount = vertexBuffer.size/6
-        println(vertexCount)
-        val triangleMesh = Mesh(vertexBuffer, vertexCount)
-        triangleMesh.init()
+        level.chunks.forEach { it.render(level) }
 
         var previousCursorPos = getCursorPos()
         var cursorPosDelta = Vector2i(0, 0)
@@ -203,9 +260,16 @@ class HelloWorld {
         var deltaTime: Long = 0
         var fps: Double
         applyMouseGrab(mouseGrab)
+        calculateBreakBlock()
 
         while (!glfwWindowShouldClose(window)) {
             val startTime = System.currentTimeMillis()
+
+            level.chunks.filter { it.stateChanged }.forEach { chunk ->
+                chunk.render(level)
+                chunk.stateChanged = false
+                //println("Chunk ${chunk.x} ${chunk.y} ${chunk.z} rendered")
+            }
 
             glLoadIdentity()
             glClear(GL_COLOR_BUFFER_BIT or GL_DEPTH_BUFFER_BIT) // clear the framebuffer
@@ -236,8 +300,9 @@ class HelloWorld {
             }
 
             if(mouseGrab) {
-                cameraYaw += cursorPosDelta.x.toFloat() * cameraRotationSpeed// * timeMultiplier
-                cameraPitch += cursorPosDelta.y.toFloat() * cameraRotationSpeed// * timeMultiplier
+                calculateBreakBlock()
+                cameraYaw += cursorPosDelta.x.toFloat() * cameraRotationSpeed * timeMultiplier
+                cameraPitch += cursorPosDelta.y.toFloat() * cameraRotationSpeed * timeMultiplier
             }
             //normalizing yaw
             if (cameraYaw < -180) cameraYaw += 360
@@ -250,47 +315,45 @@ class HelloWorld {
             glRotated(cameraYaw, 0.0, 1.0, 0.0)
 
             //start drawing
-            glPushMatrix()
+            //glPushMatrix()
             //move scene
             glTranslated(-cameraX, -cameraY, -cameraZ)
 
             glEnableClientState(GL_VERTEX_ARRAY)
             glEnableClientState(GL_COLOR_ARRAY)
-            glBindBuffer(GL_ARRAY_BUFFER, triangleMesh.vbo)
-            GL11.glVertexPointer(3, GL_DOUBLE, 8*6, 0)
-            GL11.glColorPointer(3, GL_DOUBLE, 8*6, 8*3)
 
-            glDrawArrays(GL_TRIANGLES, 0, triangleMesh.vertexCount)
+            level.chunks.forEach { chunk ->
+                if(chunk.mesh != null) {
+                    glPushMatrix()
+                    glTranslated(chunk.x*16.0, chunk.y*16.0, chunk.z*16.0)
+                    glBindBuffer(GL_ARRAY_BUFFER, chunk.mesh!!.vbo)
+                    GL11.glVertexPointer(3, GL_DOUBLE, 8 * 6, 0)
+                    GL11.glColorPointer(3, GL_DOUBLE, 8 * 6, 8 * 3)
 
-            /*
-            //glColor3f(0.0f, 0.0f, 1.0f)
-            //center triangle
-            glDrawArrays(GL_TRIANGLES, 0, triangleMesh.vertexCount)
-
-            //right triangle
-            glTranslatef(3.0f, 0.5f, 0.0f)
-            //glColor3f(1.0f, 0.0f, 0.0f)
-            glDrawArrays(GL_TRIANGLES, 0, triangleMesh.vertexCount)
-
-            //left triangle
-            glTranslatef(-3.0f, -0.5f, 0.0f)
-            glTranslatef(-3.0f, 0.5f, 0.0f)
-            //glColor3f(1.0f, 1.0f, 1.0f)
-
-            glTranslated(-0.0, 1.0, -4.0)
-            //glRotated(cameraPitch, -1.0, 0.0, 0.0)
-            //glRotated(cameraYaw, 0.0, -1.0, 0.0)
-            glRotated(cameraYaw, 0.0, -1.0, 0.0)
-            glRotated(cameraPitch, -1.0, 0.0, 0.0)
-            //glRotated(45.0, 0.0, 1.0, 0.0)
-            glTranslated(0.0, -1.0, 4.0)
-            glDrawArrays(GL_TRIANGLES, 0, 6)
-            */
+                    glDrawArrays(GL_TRIANGLES, 0, chunk.mesh!!.vertexCount)
+                    glPopMatrix()
+                }
+            }
 
             glDisableClientState(GL_VERTEX_ARRAY)
             glDisableClientState(GL_COLOR_ARRAY)
 
-            glPopMatrix()
+            //selected block
+
+            if(breakBlock != null) {
+                glPushMatrix()
+                glTranslated(breakBlock!!.x*1.0, breakBlock!!.y*1.0, breakBlock!!.z*1.0)
+                RenderUtils.renderSelectedBlock()
+                glPopMatrix()
+            }
+            /*if(placeBlock != null) {
+                glPushMatrix()
+                glTranslated(placeBlock!!.x*1.0, placeBlock!!.y*1.0, placeBlock!!.z*1.0)
+                RenderUtils.renderSelectedBlock(Vector3d(0.0, 0.9, 0.0))
+                glPopMatrix()
+            }*/
+
+            //glPopMatrix()
             //stop drawing
 
 
@@ -310,7 +373,7 @@ class HelloWorld {
 
             glfwSetWindowTitle(window, "deltaTime: $deltaTime fps: ${fps.roundToInt()} x: $cameraX y: $cameraY z: $cameraZ yaw: $cameraYaw pitch: $cameraPitch")
         }
-        triangleMesh.delete()
+        level.chunks.forEach { it.mesh?.delete() }
     }
 
     companion object {

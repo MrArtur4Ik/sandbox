@@ -1,7 +1,7 @@
 import org.lwjgl.opengl.GL15
 import org.lwjgl.opengl.GL20
 
-class Mesh(val vertexArray: DoubleArray, var vertexCount: Int){
+class Mesh(var vertexArray: DoubleArray, var vertexCount: Int){
     var vbo: Int = 0
 
     fun init() {
